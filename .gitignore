@@ -15,7 +15,6 @@ yarn-error.log*
 *.key
 secrets/
 .runtime-data/
-# Local memento / dispenser assets (not published)
 src/memento.ts
 models/dispenser.glb
 models/dispenserbutton.glb

@@ -3,7 +3,8 @@ import { engine, Schemas } from '@dcl/sdk/ecs'
 export const SyncId = {
   Match: 1,
   Clock: 2,
-  Board: 3
+  Board: 3,
+  PracticeDummy: 4
 }
 
 const PlayerRow = Schemas.Map({
@@ -25,6 +26,7 @@ export const MatchState = engine.defineComponent('dontbeadrag:MatchState', {
   ready: Schemas.Array(PlayerRow),
   line: Schemas.Array(PlayerRow),
   players: Schemas.Array(PlayerRow),
+  practice: Schemas.Boolean,
   gateStart: Schemas.Boolean,
   gateMid: Schemas.Boolean,
   gateFinish: Schemas.Boolean,
@@ -44,4 +46,14 @@ export const GameClock = engine.defineComponent('dontbeadrag:GameClock', {
 export const ScoreboardState = engine.defineComponent('dontbeadrag:ScoreboardState', {
   sequence: Schemas.Int,
   rows: Schemas.Array(BoardRow)
+})
+
+/** Server-authored practice dummy pose — all clients render from this. */
+export const PracticeDummyState = engine.defineComponent('dontbeadrag:PracticeDummyState', {
+  active: Schemas.Boolean,
+  x: Schemas.Float,
+  y: Schemas.Float,
+  z: Schemas.Float,
+  hop: Schemas.Float,
+  yaw: Schemas.Float
 })

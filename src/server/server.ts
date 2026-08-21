@@ -2,18 +2,21 @@ import { engine, Entity, PlayerIdentityData, Transform } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math'
 import { isServer, myProfile, syncEntity } from '@dcl/sdk/network'
 import { AUTH_SERVER_PEER_ID } from '@dcl/sdk/network/message-bus-sync'
-import { COUNTDOWN_MS, GROUND_Y, MAX_PLAYERS } from '../config'
-import { GameClock, MatchState, ScoreboardState, SyncId } from '../shared/components'
+import { COUNTDOWN_MS, GROUND_Y, MAX_PLAYERS, PLATFORM_TOP, ROPE_MAX } from '../config'
+import { GameClock, MatchState, PracticeDummyState, ScoreboardState, SyncId } from '../shared/components'
 import { room } from '../shared/messages'
 import { createWorld, WorldHandles } from '../world'
 import { finishKey, rankTop, type FinishEntry } from '../scoreboard'
 
 type PlayerRow = { address: string; name: string }
 
+const DUMMY_ID = 'practice-dummy'
+
 let world: WorldHandles
 let matchEntity: Entity
 let clockEntity: Entity
 let boardEntity: Entity
+let dummyEntity: Entity
 let missingMs = new Map<string, number>()
 let clockSend = 0
 let beatSend = 0
@@ -27,6 +30,10 @@ let boardKnownCount = 0
 let boardReloadTimer = 0
 let started = false
 let starting = false
+let dummyPos = Vector3.create(10, PLATFORM_TOP, 11)
+let lastHumanPos: Vector3 | null = null
+let followX = 0
+let followZ = -1.15
 
 function onlyServer(value: { senderAddress: string }) {
   return value.senderAddress === AUTH_SERVER_PEER_ID
@@ -60,6 +67,27 @@ function match() {
 
 function clock() {
   return GameClock.getMutable(clockEntity)
+}
+
+function dummyState() {
+  return PracticeDummyState.getMutable(dummyEntity)
+}
+
+function writeDummy(active: boolean, x: number, y: number, z: number, hop = 0, yaw = 0) {
+  const d = dummyState()
+  d.active = active
+  d.x = x
+  d.y = y
+  d.z = z
+  d.hop = hop
+  d.yaw = yaw
+}
+
+function hideDummy() {
+  writeDummy(false, 0, -10, 0, 0, 0)
+  lastHumanPos = null
+  followX = 0
+  followZ = -1.15
 }
 
 function busy() {
@@ -217,6 +245,7 @@ function resetMatch(keepLobby = false) {
   state.players = []
   state.startAt = 0
   state.playStartedAt = 0
+  state.practice = false
   state.gateStart = false
   state.gateMid = false
   state.gateFinish = false
@@ -236,12 +265,14 @@ function resetMatch(keepLobby = false) {
   if (state.ready.length > 0) state.phase = 'waiting'
   clock().motionT = 0
   missingMs.clear()
+  hideDummy()
 }
 
-function beginCountdown(players: PlayerRow[]) {
+function beginCountdown(players: PlayerRow[], practice = false) {
   const state = match()
   state.phase = 'countdown'
   state.players = players
+  state.practice = practice
   state.startAt = Date.now() + COUNTDOWN_MS
   state.playStartedAt = 0
   state.gateStart = false
@@ -256,6 +287,16 @@ function beginCountdown(players: PlayerRow[]) {
   state.ready = []
   clock().motionT = 0
   missingMs.clear()
+  if (practice) {
+    const slot = world.startSlots[1] ?? world.startB
+    dummyPos = Vector3.create(slot.x, slot.y, slot.z)
+    lastHumanPos = null
+    followX = 0
+    followZ = -1.15
+    writeDummy(true, dummyPos.x, dummyPos.y, dummyPos.z, 0, 0)
+  } else {
+    hideDummy()
+  }
 }
 
 function beginPlay() {
@@ -297,6 +338,74 @@ function plates(positions: Vector3[], a: Vector3, b: Vector3) {
   return { plateA, plateB, both: plateA && plateB }
 }
 
+function steerDummyToFreePlate(human: Vector3): boolean {
+  const pairs = [
+    [world.plateAPos, world.plateBPos],
+    [world.midPlateAPos, world.midPlateBPos]
+  ]
+  for (const [a, b] of pairs) {
+    const onA = xzDistance(human, a) < 1.2 && onPadY(human, a.y)
+    const onB = xzDistance(human, b) < 1.2 && onPadY(human, b.y)
+    if (onA) {
+      dummyPos.x += (b.x - dummyPos.x) * 0.28
+      dummyPos.z += (b.z - dummyPos.z) * 0.28
+      dummyPos.y = human.y
+      return true
+    }
+    if (onB) {
+      dummyPos.x += (a.x - dummyPos.x) * 0.28
+      dummyPos.z += (a.z - dummyPos.z) * 0.28
+      dummyPos.y = human.y
+      return true
+    }
+  }
+  return false
+}
+
+function tickPracticeDummy(dt: number) {
+  const state = match()
+  if (!state.practice || (state.phase !== 'countdown' && state.phase !== 'playing')) {
+    if (dummyState().active) hideDummy()
+    return
+  }
+
+  const human = state.players.find((p) => p.address !== DUMMY_ID)
+  if (!human) return
+  const player = playerPos(human.address)
+  if (!player) return
+
+  if (!steerDummyToFreePlate(player)) {
+    if (lastHumanPos) {
+      const dx = player.x - lastHumanPos.x
+      const dz = player.z - lastHumanPos.z
+      const len = Math.hypot(dx, dz)
+      if (len > 0.04) {
+        followX = (-dx / len) * 1.15
+        followZ = (-dz / len) * 1.15
+      }
+    }
+    lastHumanPos = Vector3.create(player.x, player.y, player.z)
+    const targetX = player.x + followX
+    const targetZ = player.z + followZ
+    const chase = 2.4
+    const t = Math.min(1, dt * chase)
+    dummyPos.x += (targetX - dummyPos.x) * t
+    dummyPos.z += (targetZ - dummyPos.z) * t
+    dummyPos.y = player.y
+    const ox = dummyPos.x - player.x
+    const oz = dummyPos.z - player.z
+    const sep = Math.hypot(ox, oz)
+    const cap = ROPE_MAX + 0.85
+    if (sep > cap && sep > 0.001) {
+      dummyPos.x = player.x + (ox / sep) * cap
+      dummyPos.z = player.z + (oz / sep) * cap
+    }
+  }
+
+  const yaw = (Math.atan2(player.x - dummyPos.x, player.z - dummyPos.z) * 180) / Math.PI
+  writeDummy(true, dummyPos.x, dummyPos.y, dummyPos.z, 0, yaw)
+}
+
 function tickMatch(dt: number) {
   const state = match()
   const clk = clock()
@@ -312,6 +421,8 @@ function tickMatch(dt: number) {
     clk.motionT = 0
   }
   if (clockSend >= 0.1) clockSend = 0
+
+  tickPracticeDummy(dt)
 
   if (state.phase === 'countdown') {
     const left = Number(state.startAt) - Date.now()
@@ -333,6 +444,10 @@ function tickMatch(dt: number) {
   const positions: Vector3[] = []
   let fallen = false
   for (const player of state.players) {
+    if (player.address === DUMMY_ID) {
+      if (state.practice) positions.push(Vector3.create(dummyPos.x, dummyPos.y, dummyPos.z))
+      continue
+    }
     const pos = playerPos(player.address)
     if (!pos) {
       if (!online.has(player.address)) {
@@ -368,6 +483,7 @@ function tickMatch(dt: number) {
   if (state.gateFinish) {
     const top = world.finishCenter.y
     const allIn = state.players.every((player) => {
+      if (player.address === DUMMY_ID) return true
       const pos = playerPos(player.address)
       return pos ? xzDistance(pos, world.finishCenter) < 1.45 && onPadY(pos, top) : false
     })
@@ -376,7 +492,8 @@ function tickMatch(dt: number) {
       state.phase = 'won'
       state.banner = 'You are in the ZONE!'
       wonAt = Date.now()
-      recordWin([...state.players], timeMs)
+      // Practice runs do not write the permanent leaderboard.
+      if (!state.practice) recordWin([...state.players], timeMs)
     }
   }
 }
@@ -392,6 +509,7 @@ export async function initServer(existingWorld?: WorldHandles) {
       MatchState.validateBeforeChange(onlyServer)
       GameClock.validateBeforeChange(onlyServer)
       ScoreboardState.validateBeforeChange(onlyServer)
+      PracticeDummyState.validateBeforeChange(onlyServer)
     } catch (err) {
       console.error('[SERVER] validateBeforeChange failed', err)
     }
@@ -406,6 +524,7 @@ export async function initServer(existingWorld?: WorldHandles) {
       ready: [],
       line: [],
       players: [],
+      practice: false,
       gateStart: false,
       gateMid: false,
       gateFinish: false,
@@ -426,6 +545,17 @@ export async function initServer(existingWorld?: WorldHandles) {
     ScoreboardState.create(boardEntity, { sequence: 0, rows: [] })
     await loadBoard()
     syncEntity(boardEntity, [ScoreboardState.componentId], SyncId.Board)
+
+    dummyEntity = engine.addEntity()
+    PracticeDummyState.create(dummyEntity, {
+      active: false,
+      x: 0,
+      y: -10,
+      z: 0,
+      hop: 0,
+      yaw: 0
+    })
+    syncEntity(dummyEntity, [PracticeDummyState.componentId], SyncId.PracticeDummy)
 
     room.onMessage('join', (data, context) => {
       if (!context?.from) return
@@ -463,7 +593,20 @@ export async function initServer(existingWorld?: WorldHandles) {
       if (busy()) return
       if (state.ready.length < 2 || state.ready.length > MAX_PLAYERS) return
       if (!state.ready.some((p) => p.address === context.from.toLowerCase())) return
-      beginCountdown([...state.ready])
+      beginCountdown([...state.ready], false)
+    })
+    room.onMessage('practice', (data, context) => {
+      if (!context?.from) return
+      if (busy()) return
+      const address = context.from.toLowerCase()
+      const name = (data.name || 'Player').trim() || 'Player'
+      beginCountdown(
+        [
+          { address, name },
+          { address: DUMMY_ID, name: 'Dummy' }
+        ],
+        true
+      )
     })
     room.onMessage('reset', (_data, context) => {
       if (!context?.from) return
