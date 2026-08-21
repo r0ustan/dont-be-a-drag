@@ -893,6 +893,11 @@ function packOnFinish(located: Map<string, Vector3>) {
 }
 
 function motionTime() {
+  // Practice runs locally — don't use the shared match clock (it stays at 0 in lobby).
+  if (matchPractice && (match.phase === 'playing' || match.phase === 'won')) {
+    if (match.playStartedAt <= 0) return 0
+    return Math.max(0, (Date.now() - match.playStartedAt) / 1000)
+  }
   if (match.phase === 'playing' || match.phase === 'won') {
     if (match.phase === 'won') {
       if (match.playStartedAt <= 0) return 0
@@ -1039,8 +1044,11 @@ function applyServerMatch(dt: number) {
     } else {
       beatAge += dt
     }
-    lastClockT = clock.motionT
-    lastClockAt = Date.now()
+    // Shared match clock is idle (0) while a local practice run is active.
+    if (!matchPractice) {
+      lastClockT = clock.motionT
+      lastClockAt = Date.now()
+    }
   } else {
     beatAge += dt
   }
