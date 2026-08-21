@@ -200,7 +200,8 @@ function platform(
   depth: number,
   color: Color4,
   top = PLATFORM_TOP,
-  scaleOverride?: number
+  scaleOverride?: number,
+  useLit = false
 ): Entity {
   const baseScale = 1.7
   if (isSand(color) || isDarkWood(color)) {
@@ -217,6 +218,7 @@ function platform(
       top
     })
     const position = Vector3.create(x, top - (model.y * scale) / 2, z)
+    if (useLit && !isSand(color)) return litPlatformGlb(position, scale, rotation)
     return isSand(color) ? staticRockGlb(position, scale, rotation) : staticPlatform1Glb(position, scale, rotation)
   }
   const thickness = 0.5
@@ -278,6 +280,27 @@ function staticPlatform1Glb(
     src: 'models/StaticPlatform1.glb',
     visibleMeshesCollisionMask: ColliderLayer.CL_NONE,
     invisibleMeshesCollisionMask: ColliderLayer.CL_PHYSICS | ColliderLayer.CL_POINTER
+  })
+  return entity
+}
+
+/** lit.glb — same footprint as StaticPlatform1 (~1.79 × 1.48 × 1.90); no *_collider mesh. */
+function litPlatformGlb(
+  position: Vector3,
+  scale: number | Vector3 = 1.7,
+  rotation: Quaternion = Quaternion.Identity()
+): Entity {
+  const s = typeof scale === 'number' ? Vector3.create(scale, scale, scale) : scale
+  const entity = engine.addEntity()
+  Transform.create(entity, {
+    position,
+    scale: s,
+    rotation
+  })
+  GltfContainer.create(entity, {
+    src: 'models/lit.glb',
+    visibleMeshesCollisionMask: ColliderLayer.CL_PHYSICS | ColliderLayer.CL_POINTER,
+    invisibleMeshesCollisionMask: ColliderLayer.CL_NONE
   })
   return entity
 }
@@ -652,7 +675,7 @@ export function createWorld(): WorldHandles {
 
   platform(10, 24.9, 1.55, 7.4, C.woodDark)
 
-  platform(10, 31.6, 6.0, 6.0, C.wood)
+  platform(10, 31.6, 6.0, 6.0, C.wood, PLATFORM_TOP, undefined, true)
   lantern(7.4, 28.9)
   lantern(12.6, 28.9)
 
@@ -923,7 +946,10 @@ export function createWorld(): WorldHandles {
         upsideDown ? Quaternion.fromEulerDegrees(180, 0, 0) : Quaternion.Identity()
       )
     } else if (!isFerryLand && i !== 1 && i !== 30 && i !== 33 && i !== 35 && !(i >= 32 && i % 2 === 0)) {
-      platform(p.x, p.z, size, size, color, p.y)
+      // Single-torch spiral pads use lit.glb (two-torch pads are marked separately).
+      const singleTorch =
+        i % 6 === 0 && i !== 0 && !isFerry && !isFerryLand && !isFlip && i !== 30
+      platform(p.x, p.z, size, size, color, p.y, undefined, singleTorch)
     }
 
     if (sweepers.has(i)) {
@@ -990,7 +1016,7 @@ export function createWorld(): WorldHandles {
       d: STATIC_PLATFORM1_MODEL.z * midScaleZ,
       top: midTop
     })
-    staticPlatform1Glb(
+    litPlatformGlb(
       Vector3.create(mid.x, midTop - (STATIC_PLATFORM1_MODEL.y * midScaleY) / 2, mid.z),
       midScale,
       Quaternion.fromEulerDegrees(0, rockYawDegrees(mid.x, mid.z), 0)
