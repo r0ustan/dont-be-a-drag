@@ -1133,7 +1133,8 @@ function tickPractice(dt: number, me: Vector3) {
   }
   if (match.phase === 'won') {
     setHud({ banner: flashBanner(hud.banner) })
-    paintPracticeRopes(dt)
+    clearRope()
+    stopRopePull()
     return
   }
   if (match.phase !== 'playing') {
@@ -1199,7 +1200,10 @@ function gameSystem(dt: number) {
   syncRemotePracticeDummies()
 
   const linkedLive = match.phase === 'countdown' || match.phase === 'playing'
-  if (linkedLive) {
+  if (match.phase === 'won') {
+    clearRope()
+    stopRopePull()
+  } else if (linkedLive) {
     paintMatchRopes(me, dt)
   } else if (readPracticeRows().length > 0) {
     paintPracticeRopes(dt)
