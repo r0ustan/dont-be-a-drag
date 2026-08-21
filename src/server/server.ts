@@ -455,7 +455,8 @@ function tickMatch(dt: number) {
     if (wonAt && Date.now() - wonAt > 8000) state.banner = ''
   }
 
-  if (state.phase !== 'countdown' && state.phase !== 'playing') return
+  // During the run (and after a win), a canyon fall resets so the team can queue again.
+  if (state.phase !== 'countdown' && state.phase !== 'playing' && state.phase !== 'won') return
 
   const online = connectedIds()
   const positions: Vector3[] = []
@@ -463,7 +464,7 @@ function tickMatch(dt: number) {
   for (const player of state.players) {
     const pos = playerPos(player.address)
     if (!pos) {
-      if (!online.has(player.address)) {
+      if (state.phase !== 'won' && !online.has(player.address)) {
         missingMs.set(player.address, (missingMs.get(player.address) || 0) + dt)
         if ((missingMs.get(player.address) || 0) > 2.5) {
           console.log('[SERVER] Player left during run', player.address)

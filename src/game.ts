@@ -763,7 +763,12 @@ function fallReset(canyon = false) {
     else respawnAtStart(true)
     return
   }
+  // After a win, canyon fall clears the match so everyone can link up again.
+  // Also reset locally so gates/UI clear immediately (server mirrors this).
   if (netReady) void room.send('reset', {})
+  if (match.phase === 'won') {
+    resetToLobby()
+  }
   respawnAtStart(true)
 }
 
