@@ -19,6 +19,7 @@ import {
   MAX_PLAYERS,
   PLATFORM_TOP,
   ROPE_DEADZONE,
+  ROPE_LINES,
   ROPE_MAX,
   ROPE_MAX_FORCE,
   ROPE_SOFT,
@@ -43,7 +44,7 @@ import { createRope, hideRope, updateRopes } from './rope'
 import { hud, Phase, setHud, uiActions } from './state'
 import { setGateOpen, setPlateLit, WorldHandles } from './world'
 import { tickScoreboard } from './scoreboard'
-import { GameClock, MatchState, PracticeDummyState } from './shared/components'
+import { GameClock, MatchState, PracticeDummiesState } from './shared/components'
 import { room } from './shared/messages'
 
 type LobbyPlayer = { address: string; name: string }
@@ -80,6 +81,7 @@ const ready = new Map<string, LobbyPlayer>()
 const line = new Map<string, LobbyPlayer>()
 let world: WorldHandles
 let dummy: DummyPartner | null = null
+const remoteDummies = new Map<string, ReturnType<typeof engine.addEntity>>()
 let gateOpen = false
 let midGateOpen = false
 let respawnLock = 0
@@ -547,6 +549,7 @@ function showWin(timeMs: number) {
 }
 
 function resetToLobby() {
+  if (matchPractice) void room.send('practiceStop', {})
   match.phase = 'lobby'
   match.players = []
   match.startAt = 0
@@ -556,6 +559,7 @@ function resetToLobby() {
   spectateWait = false
   clearAfk()
   resetVisuals()
+  hideDummy()
   setHud({
     phase: 'lobby',
     subtitle: 'Find 2-4 players and link up',
@@ -643,15 +647,33 @@ function flushJoin() {
 }
 
 function clickPractice() {
-  if (matchBusy()) {
-    setHud({ hint: 'A run is already in progress. Wait for the next match.' })
+  // Only block while a real linked match occupies the course.
+  if (matchBusy() && !matchPractice) {
+    setHud({ hint: 'A linked match is in progress. Wait for the next run.' })
     return
   }
-  if (!netReady) {
+  if (matchPractice) {
+    setHud({ hint: 'You are already in a practice run.' })
+    return
+  }
+  if (!room.isReady() && !netReady) {
     setHud({ hint: 'Still connecting to the match server…' })
     return
   }
-  void room.send('practice', { name: myName() })
+  dummy = dummy ?? createDummy()
+  dummy.pos = Vector3.clone(world.startB)
+  dummy.vx = 0
+  dummy.vz = 0
+  dummy.knockCd = 0
+  dummy.hop = 0
+  void room.send('practiceStart', { name: myName() })
+  beginCountdown(
+    [
+      { address: myId() || 'local', name: myName() },
+      { address: DUMMY_ID, name: 'Dummy' }
+    ],
+    Date.now() + COUNTDOWN_MS
+  )
 }
 
 function clickStart() {
@@ -731,8 +753,8 @@ function fallReset(canyon = false) {
   if (lost) playDeath()
   clearAfk()
   if (matchPractice) {
-    if (netReady) void room.send('reset', {})
-    else resetToLobby()
+    void room.send('practiceStop', {})
+    resetToLobby()
     respawnAtStart(true)
     return
   }
@@ -890,60 +912,114 @@ function matePositions() {
     .filter((x): x is { player: LobbyPlayer; pos: Vector3 } => x !== null)
 }
 
-function readDummy() {
-  for (const [_entity, state] of engine.getEntitiesWith(PracticeDummyState)) return state
-  return null
+function readPracticeRows() {
+  for (const [_entity, state] of engine.getEntitiesWith(PracticeDummiesState)) return state.rows || []
+  return []
 }
 
-function syncDummyFromServer() {
-  const state = readDummy()
-  if (!state?.active) {
-    hideDummy()
-    return
+function ensureRemoteDummy(address: string) {
+  const existing = remoteDummies.get(address)
+  if (existing) return existing
+  const root = engine.addEntity()
+  Transform.create(root, { position: Vector3.create(0, -10, 0), scale: Vector3.create(1, 1, 1) })
+  GltfContainer.create(root, { src: 'models/dummy.glb' })
+  remoteDummies.set(address, root)
+  return root
+}
+
+function syncRemotePracticeDummies() {
+  const rows = readPracticeRows()
+  const me = myId()
+  const keep = new Set<string>()
+  for (const row of rows) {
+    const address = (row.address || '').toLowerCase()
+    if (!address || address === me) continue
+    keep.add(address)
+    const root = ensureRemoteDummy(address)
+    const t = Transform.getMutable(root)
+    t.position = Vector3.create(row.x, row.y + (row.hop || 0), row.z)
+    t.rotation = Quaternion.fromEulerDegrees(0, row.yaw || 0, 0)
+    t.scale = Vector3.create(1, 1, 1)
   }
-  if (!dummy) dummy = createDummy()
-  dummy.pos.x = state.x
-  dummy.pos.y = state.y
-  dummy.pos.z = state.z
-  dummy.hop = state.hop
-  const t = Transform.getMutable(dummy.root)
-  t.position = Vector3.create(state.x, state.y + state.hop, state.z)
-  t.rotation = Quaternion.fromEulerDegrees(0, state.yaw, 0)
-  t.scale = Vector3.create(1, 1, 1)
+  for (const [address, root] of [...remoteDummies.entries()]) {
+    if (keep.has(address)) continue
+    Transform.getMutable(root).position = Vector3.create(0, -10, 0)
+    remoteDummies.delete(address)
+    engine.removeEntity(root)
+  }
 }
 
 function paintPracticeRopes(dt: number) {
-  if (!dummy) return false
   const pairs: Array<{ fromId: string; toId: string; from: Vector3; to: Vector3; tension: number }> = []
-  for (const p of match.players) {
-    if (p.address === DUMMY_ID) continue
-    const from = p.address === myId() ? localPos() : liveOrLast(p.address)
-    if (!from) continue
+  const me = myId()
+
+  if (matchPractice && dummy && me) {
     pairs.push({
-      fromId: p.address,
+      fromId: me,
       toId: DUMMY_ID,
-      from,
+      from: localPos(),
       to: Vector3.clone(dummy.pos),
-      tension: Math.min(1, xzDistance(from, dummy.pos) / ROPE_MAX)
+      tension: Math.min(1, xzDistance(localPos(), dummy.pos) / ROPE_MAX)
     })
   }
-  if (pairs.length === 0) return false
-  updateRopes(pairs, dt)
+
+  for (const row of readPracticeRows()) {
+    const address = (row.address || '').toLowerCase()
+    if (!address || address === me) continue
+    const from = liveOrLast(address)
+    if (!from) continue
+    const to = Vector3.create(row.x, row.y, row.z)
+    pairs.push({
+      fromId: address,
+      toId: `${DUMMY_ID}:${address}`,
+      from,
+      to,
+      tension: Math.min(1, xzDistance(from, to) / ROPE_MAX)
+    })
+  }
+
+  if (pairs.length === 0) {
+    hideRope()
+    return false
+  }
+  updateRopes(pairs.slice(0, ROPE_LINES), dt)
   return true
 }
 
-function paintRopes(me: Vector3, mates: Array<{ player: LobbyPlayer; pos: Vector3 }>, dt: number) {
-  if (!selfPlayer() || mates.length === 0) return false
-  updateRopes(
-    mates.map((m) => ({
-      fromId: myId(),
-      toId: m.player.address,
-      from: me,
-      to: m.pos,
-      tension: Math.min(1, xzDistance(me, m.pos) / ROPE_MAX)
-    })),
-    dt
-  )
+function posForMatchPlayer(address: string, me: Vector3): Vector3 | null {
+  if (address === myId()) return me
+  return liveOrLast(address)
+}
+
+/** Every client draws the full teammate mesh so spectators see the same ropes. */
+function paintMatchRopes(me: Vector3, dt: number) {
+  const humans = match.players.filter((p) => p.address !== DUMMY_ID)
+  if (humans.length < 2) {
+    hideRope()
+    return false
+  }
+  const pairs: Array<{ fromId: string; toId: string; from: Vector3; to: Vector3; tension: number }> = []
+  for (let i = 0; i < humans.length; i++) {
+    for (let j = i + 1; j < humans.length; j++) {
+      const a = humans[i].address
+      const b = humans[j].address
+      const from = posForMatchPlayer(a, me)
+      const to = posForMatchPlayer(b, me)
+      if (!from || !to) continue
+      pairs.push({
+        fromId: a,
+        toId: b,
+        from,
+        to,
+        tension: Math.min(1, xzDistance(from, to) / ROPE_MAX)
+      })
+    }
+  }
+  if (pairs.length === 0) {
+    hideRope()
+    return false
+  }
+  updateRopes(pairs.slice(0, ROPE_LINES), dt)
   return true
 }
 
@@ -973,6 +1049,7 @@ function applyServerMatch(dt: number) {
 
   if (!state) {
     if (!matchPractice) refreshLobbyHud()
+    syncRemotePracticeDummies()
     return
   }
 
@@ -980,10 +1057,18 @@ function applyServerMatch(dt: number) {
     (state.ready || []).map((p) => ({ address: p.address, name: p.name })),
     (state.line || []).map((p) => ({ address: p.address, name: p.name }))
   )
+  syncRemotePracticeDummies()
+
+  // Local practice runs on this client; do not let the shared match overwrite it.
+  if (matchPractice) {
+    seenPhase = (state.phase || 'lobby') as Phase
+    seenPlayStartedAt = Number(state.playStartedAt) || 0
+    return
+  }
+
   match.players = (state.players || []).map((p) => ({ address: p.address.toLowerCase(), name: p.name }))
   match.startAt = Number(state.startAt) || 0
   match.playStartedAt = Number(state.playStartedAt) || 0
-  matchPractice = !!state.practice || match.players.some((p) => p.address === DUMMY_ID)
   const phase = (state.phase || 'lobby') as Phase
   const phaseChanged = phase !== seenPhase
   const runChanged = Number(state.playStartedAt) !== seenPlayStartedAt
@@ -1014,43 +1099,67 @@ function applyServerMatch(dt: number) {
 
   if (phase === 'countdown' || phase === 'playing' || phase === 'won') {
     applyCourse(state)
-    if (iAmInMatch()) setHud({ banner: flashBanner(state.banner || ''), practice: matchPractice })
+    if (iAmInMatch()) setHud({ banner: flashBanner(state.banner || '') })
   }
 }
 
 function tickPractice(dt: number, me: Vector3) {
-  // Dummy pose is server-authored; all clients (including spectators) render it + the rope.
-  syncDummyFromServer()
-  if (match.phase === 'countdown' || match.phase === 'playing') {
-    paintPracticeRopes(dt)
-  } else {
-    clearRope()
-  }
-
-  if (!iAmInMatch()) {
-    stopRopePull()
-    return
-  }
-
+  syncRemotePracticeDummies()
   if (me.y < GROUND_Y && respawnLock <= 0) {
     fallReset(true)
     return
   }
   if (match.phase === 'countdown') {
+    updateDummy(dt, me)
+    const left = match.startAt - Date.now()
+    if (left <= 0) beginPlay()
+    else setHud({ banner: flashBanner(String(Math.max(1, Math.ceil(left / 1000)))), bannerAlpha: 1 })
+    paintPracticeRopes(dt)
     stopRopePull()
     return
   }
   if (match.phase === 'won') {
     setHud({ banner: flashBanner(hud.banner) })
+    paintPracticeRopes(dt)
     return
   }
-  if (match.phase !== 'playing') return
+  if (match.phase !== 'playing') {
+    paintPracticeRopes(dt)
+    return
+  }
   setHud({
-    timeMs: motionTime() * 1000,
+    timeMs: Date.now() - match.playStartedAt,
     banner: flashBanner(hud.banner)
   })
+  updateDummy(dt, me)
+  steerDummyToFreePlate(me)
   const mates = matePositions()
+  if (!paintPracticeRopes(dt)) {
+    stopRopePull()
+    return
+  }
   enforceRopes(me, mates)
+  const located = new Map<string, Vector3>()
+  located.set(myId(), me)
+  for (const m of mates) located.set(m.player.address, m.pos)
+  const allPos = [...located.values()]
+  const mid = platesPressed(allPos, world.midPlateAPos, world.midPlateBPos)
+  setPlateLit(world.midPlateA, mid.plateA)
+  setPlateLit(world.midPlateB, mid.plateB)
+  notePads('mid', mid.both)
+  if (mid.both && !midGateOpen) {
+    midGateOpen = true
+    courseGate(world.midGate, true, world.midGateClosedY)
+  }
+  const plates = platesPressed(allPos, world.plateAPos, world.plateBPos)
+  setPlateLit(world.plateA, plates.plateA)
+  setPlateLit(world.plateB, plates.plateB)
+  notePads('finish', plates.both)
+  if (plates.both && !gateOpen) {
+    gateOpen = true
+    courseGate(world.gate, true, world.gateClosedY)
+  }
+  if (packOnFinish(located)) showWin(Date.now() - match.playStartedAt)
 }
 
 function gameSystem(dt: number) {
@@ -1064,8 +1173,8 @@ function gameSystem(dt: number) {
   const moversLive = match.phase === 'playing' || match.phase === 'won'
   const flamesLive =
     moversLive || matchPractice || match.phase === 'lobby' || match.phase === 'waiting' || match.phase === 'countdown'
-  tickMovers(world.movers, dt, me, moversLive, motionTime(), null)
-  tickFlameHazards(world.flameHazards, dt, me, flamesLive, null)
+  tickMovers(world.movers, dt, me, moversLive, motionTime(), matchPractice ? dummy : null)
+  tickFlameHazards(world.flameHazards, dt, me, flamesLive, matchPractice ? dummy : null)
 
   if (matchPractice) {
     tickPractice(dt, me)
@@ -1074,17 +1183,31 @@ function gameSystem(dt: number) {
     return
   }
 
-  hideDummy()
+  syncRemotePracticeDummies()
+
+  const linkedLive = match.phase === 'countdown' || match.phase === 'playing'
+  if (linkedLive) {
+    paintMatchRopes(me, dt)
+  } else if (readPracticeRows().length > 0) {
+    paintPracticeRopes(dt)
+  } else {
+    clearRope()
+  }
 
   if (me.y < GROUND_Y && respawnLock <= 0) fallReset(true)
 
-  if (matchBusy() && !iAmInMatch() && respawnLock <= 0 && !inStartCage(me)) {
-    if (spectateWait || line.has(myId())) teleportToSpectate()
-    else respawnAtStart(true)
+  // Spectators can roam the course; only park non-spectators back at start.
+  if (
+    matchBusy() &&
+    !iAmInMatch() &&
+    respawnLock <= 0 &&
+    !inStartCage(me) &&
+    !(spectateWait || line.has(myId()))
+  ) {
+    respawnAtStart(true)
   }
 
   if (match.phase === 'countdown' && iAmInMatch()) {
-    paintRopes(me, matePositions(), dt)
     stopRopePull()
   }
 
@@ -1094,15 +1217,13 @@ function gameSystem(dt: number) {
       banner: flashBanner(hud.banner)
     })
     const mates = matePositions()
-    if (paintRopes(me, mates, dt) || (selfPlayer() && teammates().length === 0)) {
+    if (mates.length > 0 || teammates().length === 0) {
       enforceRopes(me, mates)
     } else {
       stopRopePull()
     }
   } else if (match.phase === 'won' && iAmInMatch()) {
     setHud({ banner: flashBanner(hud.banner) })
-  } else if (match.phase !== 'countdown') {
-    clearRope()
   }
 
   if (!iAmLinked()) hud.tension = 0

@@ -7,7 +7,8 @@ export const Messages = {
   lineJoin: Schemas.Map({ name: Schemas.String }),
   lineLeave: Schemas.Map({}),
   start: Schemas.Map({}),
-  practice: Schemas.Map({ name: Schemas.String }),
+  practiceStart: Schemas.Map({ name: Schemas.String }),
+  practiceStop: Schemas.Map({}),
   reset: Schemas.Map({})
 }
 

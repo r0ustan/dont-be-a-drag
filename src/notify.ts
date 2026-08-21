@@ -1,4 +1,4 @@
-/** Lightweight toast notifications for client UI (toasts). */
+/** Lightweight toast notifications for client UI (memento claim, etc.). */
 
 let text = ''
 let visible = false

@@ -22,12 +22,13 @@ export const COUNTDOWN_MS = 5000
 export const KNOCK_IMPULSE = 10
 export const KNOCK_FORCE = 16
 export const MAX_PLAYERS = 4
-export const ROPE_LINES = 3
+/** Enough for a full mesh of MAX_PLAYERS (n*(n-1)/2). */
+export const ROPE_LINES = 6
 export const AFK_IDLE_SEC = 30
 export const AFK_PROMPT_SEC = 10
 export const AFK_MOVE_EPS = 0.4
 
-/** Optional remote finish leaderboard API base (leave empty for Storage-only). */
+/** Permanent co-op finish leaderboard (Hetzner JSON store). */
 export const LEADERBOARD_API_BASE = ''
 
 export const C = {

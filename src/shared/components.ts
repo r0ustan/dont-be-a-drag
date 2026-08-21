@@ -4,7 +4,7 @@ export const SyncId = {
   Match: 1,
   Clock: 2,
   Board: 3,
-  PracticeDummy: 4
+  PracticeDummies: 4
 }
 
 const PlayerRow = Schemas.Map({
@@ -19,6 +19,15 @@ const BoardRow = Schemas.Map({
   key: Schemas.String
 })
 
+const PracticeRow = Schemas.Map({
+  address: Schemas.String,
+  x: Schemas.Float,
+  y: Schemas.Float,
+  z: Schemas.Float,
+  hop: Schemas.Float,
+  yaw: Schemas.Float
+})
+
 export const MatchState = engine.defineComponent('dontbeadrag:MatchState', {
   phase: Schemas.String,
   startAt: Schemas.Int64,
@@ -26,7 +35,6 @@ export const MatchState = engine.defineComponent('dontbeadrag:MatchState', {
   ready: Schemas.Array(PlayerRow),
   line: Schemas.Array(PlayerRow),
   players: Schemas.Array(PlayerRow),
-  practice: Schemas.Boolean,
   gateStart: Schemas.Boolean,
   gateMid: Schemas.Boolean,
   gateFinish: Schemas.Boolean,
@@ -48,12 +56,7 @@ export const ScoreboardState = engine.defineComponent('dontbeadrag:ScoreboardSta
   rows: Schemas.Array(BoardRow)
 })
 
-/** Server-authored practice dummy pose — all clients render from this. */
-export const PracticeDummyState = engine.defineComponent('dontbeadrag:PracticeDummyState', {
-  active: Schemas.Boolean,
-  x: Schemas.Float,
-  y: Schemas.Float,
-  z: Schemas.Float,
-  hop: Schemas.Float,
-  yaw: Schemas.Float
+/** One synced dummy pose per practicing player — many can practice at once. */
+export const PracticeDummiesState = engine.defineComponent('dontbeadrag:PracticeDummiesState', {
+  rows: Schemas.Array(PracticeRow)
 })

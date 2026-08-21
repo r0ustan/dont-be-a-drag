@@ -66,13 +66,9 @@
     "portableExperiences": "disabled",
     "nearbyVoiceChat": "enabled"
   },
-  "creator": "",
   "rating": "A",
   "skyboxConfig": {
     "fixedTime": 86340
   },
-  "landscapeTerrain": false,
-  "source": {
-    "origin": "creator-hub"
-  }
+  "landscapeTerrain": false
 }
