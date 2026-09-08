@@ -24,16 +24,16 @@ export type FinishBoard = {
   updatedAtMs: number
 }
 
-const TOP_N = 10
+const TOP_N = 20
 
-const PANEL_W = 5.8
+const PANEL_W = 6.68
 const PANEL_D = 0.14
 const BORDER = 0.18
 const CORNER_R = 0.18
 const EDGE_PAD = 0.75
 const TITLE_TO_SUB = 0.38
-const TITLE_TO_BODY = 1.05
-const PANEL_H = 8.2
+const TITLE_TO_BODY = 0.52
+const PANEL_H = 7.49
 const TEXT_SCALE = 1.35
 
 const PINK = Color4.create(1, 0.35, 0.72, 1)
@@ -57,9 +57,17 @@ export function finishKey(addresses: string[]) {
   return addresses.map((a) => a.toLowerCase()).filter(Boolean).sort().join('|')
 }
 
+function playerCount(row: FinishEntry) {
+  return Math.max(0, row.names.filter(Boolean).length)
+}
+
 export function rankTop(entries: FinishEntry[]): FinishEntry[] {
   return [...entries]
-    .sort((a, b) => a.timeMs - b.timeMs || a.names.join().localeCompare(b.names.join()))
+    .sort((a, b) => {
+      const byPlayers = playerCount(b) - playerCount(a)
+      if (byPlayers) return byPlayers
+      return a.timeMs - b.timeMs || a.names.join().localeCompare(b.names.join())
+    })
     .slice(0, TOP_N)
     .map((row, i) => ({ ...row, rank: i + 1 }))
 }
@@ -113,9 +121,13 @@ function buildBodyText(board: FinishBoard) {
   if (!board.top.length) {
     lines.push('(no finishes yet)')
   } else {
+    let lastCount = -1
     for (const row of board.top) {
-      const names = row.names.join(' • ').slice(0, 42)
-      lines.push(`${row.rank}. ${formatTime(row.timeMs)}  ${names}`)
+      const n = playerCount(row)
+      if (lastCount !== -1 && n !== lastCount) lines.push('')
+      lastCount = n
+      const names = row.names.join(' • ').slice(0, 50)
+      lines.push(`${formatTime(row.timeMs)}  ${names}`)
     }
   }
   return lines.join('\n')
@@ -281,7 +293,7 @@ function spawnOneBoard(x: number, z: number, yaw: number) {
     scale: Vector3.create(TEXT_SCALE, TEXT_SCALE, TEXT_SCALE)
   })
   TextShape.create(sub, {
-    text: `TOP ${TOP_N}  ·  FASTEST`,
+    text: `TOP ${TOP_N}`,
     fontSize: 1.45,
     textColor: TEXT_COLOR,
     textAlign: TextAlignMode.TAM_MIDDLE_CENTER
@@ -295,7 +307,7 @@ function spawnOneBoard(x: number, z: number, yaw: number) {
   })
   TextShape.create(body, {
     text: buildBodyText(cached),
-    fontSize: 1.85,
+    fontSize: 1.35,
     textColor: TEXT_COLOR,
     textAlign: TextAlignMode.TAM_TOP_CENTER
   })
@@ -306,7 +318,7 @@ export function setupScoreboard() {
   if (spawned) return
   spawned = true
   spawnOneBoard(2.54, 9, -90)
-  spawnOneBoard(17.46, 9, 90)
+  spawnOneBoard(17.46, 10, 90)
   void fetchRemoteBoard()
 }
 
